@@ -10,6 +10,7 @@
 #define MMPR 100 // millimeters per revolution
 #define MAX_LENGTH 256 // chars for serial communication
 #define Kp 2
+#define MAX_FREQ 3000
 
 char send_buf[MAX_LENGTH];
 char recv_buf[MAX_LENGTH];
@@ -44,7 +45,7 @@ volatile bool newSetpoint = false;
 typedef struct i2c_transaction_t {
     volatile uint8_t addr;
     volatile uint8_t n_bytes;
-    volatile uint8_t buf[32];
+    volatile uint8_t buf[16];
     volatile uint8_t flags;
     volatile uint8_t err_code;
     i2c_transaction_t *next;
@@ -149,40 +150,56 @@ void manualPrintln(const char *str) {
 }
 
 void readEncoder() {
-    // setup for encoder position
     i2c_transaction_t read_Data[2];
 
-    // write the address to read from
-    read_Data[0].addr = 0x36; // device address
+    read_Data[0].addr = 0x36;
     read_Data[0].n_bytes = 1;
-    read_Data[0].buf[0] = 0x0C; // raw position high byte
+    read_Data[0].buf[0] = 0x0C;
     read_Data[0].flags = I2C_FLAGS_RESTART;
+    read_Data[0].err_code = 0;
     read_Data[0].next = &(read_Data[1]);
 
-    // read from the address
     read_Data[1].addr = 0x36;
-    read_Data[1].n_bytes = 2; // number of bytes to sequentially read
+    read_Data[1].n_bytes = 2;
     read_Data[1].flags = I2C_FLAGS_READ;
+    read_Data[1].err_code = 0;
+    read_Data[1].next = NULL;
 
     startI2C(read_Data);
 
-    while (!(read_Data[1].flags & I2C_FLAGS_DONE));
+    uint32_t timeout = 10000;
+
+    while (!(read_Data[1].flags & I2C_FLAGS_DONE) &&
+           !(read_Data[0].flags & I2C_FLAGS_ERROR) &&
+           !(read_Data[1].flags & I2C_FLAGS_ERROR) &&
+           timeout--) {
+           }
+
+    if (timeout == 0) {
+        manualPrintln("I2C TIMEOUT!");
+        TWCR = (1 << TWINT) | (1 << TWEN) | (1 << TWSTO);
+        return;
+    }
 
     if (read_Data[0].flags & I2C_FLAGS_ERROR) {
+        manualPrintln("I2C WRITE ERROR!");
+        return;
     }
-    else if (read_Data[1].flags & I2C_FLAGS_ERROR) {
-    }
-    else {
-        posRaw = ((int16_t)(read_Data[1].buf[0] << 8) | read_Data[1].buf[1]);
 
-        if (initalizePosition) {
-            initalizePosition = false;
-            motorPosPrev = posRaw;
-            motorPos = 0;
-            motorPosOffset = posRaw;
-        } else {
-            phaseUnwrap(posRaw, &motorPosPrev, &motorPos);
-        }
+    if (read_Data[1].flags & I2C_FLAGS_ERROR) {
+        manualPrintln("I2C READ ERROR!");
+        return;
+    }
+
+    posRaw = ((int16_t)(read_Data[1].buf[0] << 8) | read_Data[1].buf[1]);
+
+    if (initalizePosition) {
+        initalizePosition = false;
+        motorPosPrev = posRaw;
+        motorPos = 0;
+        motorPosOffset = posRaw;
+    } else {
+        phaseUnwrap(posRaw, &motorPosPrev, &motorPos);
     }
 }
 
@@ -253,6 +270,7 @@ void setup() {
              (1 << RXCIE0);
     UCSR0C = (1 << UCSZ01) | (1 << UCSZ00);
     sei();
+    setStepFrequency(0);
 }
 
 void loop() {
@@ -265,34 +283,32 @@ void loop() {
         cli();
         strcpy(setpoint_buf, recv_buf);
         sei();
-
         multiplier = 0;
-
         manualPrintln(setpoint_buf);
-
         setpointPosition = strtol(setpoint_buf, NULL, 10);
     }
 
     if (controlUpdate && running) {
         controlUpdate = false;
+
+        // feedback control
+        errPos = setpointPosition - motorPos;
+        errIsNegative = errPos < 0;
         if (errPos == 0) {
             running = false;
             manualPrintln("GOAL REACHED");
+            setStepFrequency(0);
+            return;
         }
         multiplier += 0.004;
 
         if (multiplier > 1) {
             multiplier = 1;
         }
-
-        // feedback control
-        errPos = setpointPosition - motorPos;
-        errIsNegative = errPos < 0;
-
         long cmdVel = abs(multiplier * errPos);
-        long cmdVelLimited = (long)(Kp * constrain(cmdVel, 0, 2000));
+        long cmdVelLimited = (long)(Kp * constrain(cmdVel, 0, MAX_FREQ));
 
-        cmdVelLimited = constrain(cmdVelLimited, 1, 2000);
+        cmdVelLimited = constrain(cmdVelLimited, 1, MAX_FREQ);
 
         if (errIsNegative) {
             ccw();
@@ -303,6 +319,7 @@ void loop() {
         setStepFrequency(cmdVelLimited);
         printDiagnostics();
     }
+
 }
 
 ISR(TWI_vect) {
