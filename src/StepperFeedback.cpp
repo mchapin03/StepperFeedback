@@ -81,13 +81,11 @@ void cw() {
 
 void setStepFrequency(long stepHz) {
     if (stepHz <= 0) {
-        // Disconnect OC1A toggle output to stop pulses
         TCCR1A &= ~(1 << COM1A0);
-        PORTB &= ~(1 << PORTB1); // force D9 low
+        PORTB &= ~(1 << PORTB1);
         return;
     }
 
-    // Re-enable OC1A toggle output
     TCCR1A |= (1 << COM1A0);
 
     // CTC toggle mode:
@@ -103,14 +101,11 @@ void setStepFrequency(long stepHz) {
     }
 
     cli();
-
-    // Avoid one long cycle if the new TOP is below the current timer count
     if (TCNT1 > newOCR) {
         TCNT1 = 0;
     }
 
     OCR1A = (uint16_t)newOCR;
-
     sei();
 }
 
@@ -282,6 +277,7 @@ void loop() {
         controlUpdate = false;
         if (errPos == 0) {
             running = false;
+            manualPrintln("GOAL REACHED");
         }
         multiplier += 0.004;
 
@@ -307,8 +303,6 @@ void loop() {
         setStepFrequency(cmdVelLimited);
         printDiagnostics();
     }
-
-
 }
 
 ISR(TWI_vect) {
