@@ -38,7 +38,7 @@ volatile uint16_t send_len = 0;
 volatile uint16_t recv_len = 0;
 volatile uint8_t err_status = 0;
 volatile bool sending = false;
-volatile bool update = false;
+volatile bool newString = false;
 volatile bool controlUpdate = false;
 volatile bool newSetpoint = false;
 
@@ -277,8 +277,8 @@ void loop() {
     readEncoder();
 
     // read string from serial
-    if (update) {
-        update = false;
+    if (newString) {
+        newString = false;
         running = true;
         cli();
         strcpy(setpoint_buf, recv_buf);
@@ -394,7 +394,7 @@ ISR(USART_RX_vect) {
 
     if (c == '\n') {
         recv_buf[recv_len] = '\0';
-        update = true;
+        newString = true;
         recv_len = 0;
         return;
     }
